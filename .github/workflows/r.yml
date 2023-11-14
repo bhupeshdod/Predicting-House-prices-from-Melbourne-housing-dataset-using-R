@@ -1,0 +1,441 @@
+---
+title:
+author: "MSCI718 2023W Individual Assignment 3-Multiple Linear Regression - Submitted by Bhupesh Dod (21046099)"
+output:
+  pdf_document: 
+    latex_engine: lualatex
+    fig_width: 6.5
+    fig_height: 4
+    df_print: paged
+header-includes:
+   - \usepackage{titlesec}
+   - \titlespacing{\title}{1pt}{\parskip}{-\parskip}
+   - \setlength{\parskip}{-0.1em}
+geometry: margin= 1.1cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.height=2, fig.width=8)
+library(tidyverse)
+library(knitr)    # For knitting document and include_graphics function
+library(gridExtra) # For including grids of plots
+library(psych)
+library(ggiraph)
+library(ggiraphExtra)
+library(car)
+library(GGally) #for ggpairs
+
+melbh_dataset <- read.csv("melb_data.csv")
+```
+
+# MSCI718 2023W Individual Assignment 3 -Multiple Linear Regression
+
+## Data description
+
+The Melbourne housing dataset contains 13580 observations across 21 variables. The focus of study is on, "**Which feature outperforms the other in investment analysis if we prioritize "Type" and "Region name"?**". This research is significant because it helps in the identification and prioritization of critical decision variables in future investments. As a result, a subset of five features with a strong correlation, and that may have the greatest impact on home prices are selected are shown below:
+
+-   **Price** (Price of property in dollars): (interval, continuous) output variable, **Bathroom** (Number of Bathrooms): (ordinal or continuous, coded as integers), **Room** (Number of Rooms): (ordinal or continuous, coded as integers), **YearBuilt** (Year of Built of property): (interval, integers), **Distance** (Distance from CBD): (interval, integers), **Landsize** (Land size of property): (interval, integers).
+-   **Type** (Type of Real Estate): (categorical, ordinal) h - house, cottage, villa, semi, terrace; u - unit, duplex; t - townhouse, **Regionname** (Name of Region): (categorical, ordinal) General Region (Eastern Metropolitan, Eastern Victoria, Northern Metropolitan, Northern Victoria, South-Eastern Metropolitan, Southern Metropolitan, Western Metropolitan, Western Victoria)
+
+Visual inspection of the Boxplot and inspection of the minimum and maximum datapoints revealed some outliers. There were some abnormal values at YearBuilt=1196 and Landsize=37000 that were influencing the model, so outliers and abnormal values (shown in Appendix 1 and 2) that are outside 2 times standard deviation of the mean are removed, and some null values are omitted, resulting in 8205 observations in the final dataset.
+
+```{r include=FALSE, message=FALSE}
+selected_dataset <- melbh_dataset %>% select(Price, Type, Rooms, Bathroom, Regionname, YearBuilt, Landsize, Distance) %>% na.exclude #%>% filter(YearBuilt>1196) %>% filter(Landsize<37000)
+summary(selected_dataset)
+```
+
+```{r removing_outliers, message=FALSE, include=FALSE}
+str(selected_dataset)
+
+selected_dataset <- selected_dataset[!abs(selected_dataset$Price-mean(selected_dataset$Price)) > 2*sd(selected_dataset$Price), ]
+selected_dataset <- selected_dataset[!abs(selected_dataset$Rooms-mean(selected_dataset$Rooms)) > 2*sd(selected_dataset$Rooms), ]
+selected_dataset <- selected_dataset[!abs(selected_dataset$Bathroom-mean(selected_dataset$Bathroom)) > 2*sd(selected_dataset$Bathroom), ]
+selected_dataset <- selected_dataset[!abs(selected_dataset$YearBuilt-mean(selected_dataset$YearBuilt)) > 2*sd(selected_dataset$YearBuilt), ]
+selected_dataset <- selected_dataset[!abs(selected_dataset$Landsize-mean(selected_dataset$Landsize)) > 2*sd(selected_dataset$Landsize), ]
+selected_dataset <- selected_dataset[!abs(selected_dataset$Distance-mean(selected_dataset$Distance)) > 2*sd(selected_dataset$Distance), ]
+
+#selected_dataset <- selected_dataset %>% filter(Price <= quantile(Price,0.75)+2*IQR(Price) & Price >= quantile(Price,0.25)-2*IQR(Price))
+```
+
+```{r Plotting of data, message=FALSE, include=FALSE}
+g1 <- ggplot(data = selected_dataset, mapping = aes(x =Landsize, y = Price)) + geom_point(aes(color = Regionname))
+g2 <- ggplot(data = selected_dataset, mapping = aes(x = Distance, y = Price)) + geom_point(aes(color = Type))
+grid.arrange(g1,g2, ncol = 2, nrow = 1, top = "Distribution of Price of houses based on Landsize and Distance features")
+```
+
+```{r Converting Categorical feature Regionname, message=FALSE, include=FALSE}
+selected_dataset$Regionname <- factor(selected_dataset$Regionname, levels=c("Eastern Metropolitan", "Eastern Victoria", "Northern Metropolitan", "Northern Victoria", "South-Eastern Metropolitan", "Southern Metropolitan", "Western Metropolitan", "Western Victoria"))
+East_Metropol <- c(1,0,0,0,0,0,0,0)
+East_Victoria  <- c(0,1,0,0,0,0,0,0)
+North_Metropolitan <- c(0,0,1,0,0,0,0,0)
+North_Victoria <- c(0,0,0,1,0,0,0,0)
+South_East_Metropol <- c(0,0,0,0,1,0,0,0)
+South_Metropol <- c(0,0,0,0,0,1,0,0)
+West_Metropol <- c(0,0,0,0,0,0,1,0)
+
+contrasts(selected_dataset$Regionname) <- cbind(East_Metropol, East_Victoria, North_Metropolitan, North_Victoria, South_East_Metropol, South_Metropol, West_Metropol)
+contrasts(selected_dataset$Regionname)
+```
+
+```{r Converting Categorical feature Type, message=FALSE, include=FALSE}
+# where 
+selected_dataset$Type <- factor(selected_dataset$Type, levels=c("h", "t", "u"))
+t_H <- c(1,0,0)
+t_T <- c(0,1,0)
+contrasts(selected_dataset$Type) <- cbind(t_H,t_T)
+contrasts(selected_dataset$Type)
+
+summary(selected_dataset)
+```
+
+```{r Boxplot of Features with categorized by Type, fig.height=3.5, fig.width=16, message=FALSE, warning=FALSE, include=FALSE}
+plt1 <- ggplot(aes(y = YearBuilt, x = Type), data = selected_dataset) + geom_boxplot() +
+  ylab('Year of Built') + ggtitle('Year Built') + theme(text = element_text(size = 10), legend.position = "none")
+plt2 <- ggplot(aes(y = Rooms, x = Type), data = selected_dataset) + geom_boxplot() +
+  ylab('Number of Rooms') + ggtitle('Rooms') +  theme(text = element_text(size = 10), legend.position = "none")
+plt3 <- ggplot(aes(y = Bathroom, x = Type), data = selected_dataset) + geom_boxplot() +
+  ylab('Number of Bathrooms') + ggtitle('Bathroom') + theme(text = element_text(size = 10), legend.position = "none")
+plt4 <- ggplot(aes(y = Landsize, x = Type), data = selected_dataset) + geom_boxplot() +
+  ylab('Size of Land') + ggtitle('Land Size') +  theme(text = element_text(size = 10), legend.position = "none")
+plt5 <- ggplot(aes(y = Distance, x = Type), data = selected_dataset) + geom_boxplot() +
+  ylab('Distance from CBD') + ggtitle('Distance') +  theme(text = element_text(size = 10), legend.position = "none")
+grid.arrange(plt1,plt2,plt3,plt4,plt5, ncol = 5, nrow = 1, top = "Boxplots of Features")
+```
+
+```{r Boxplot of Features with categorized by Regionname, fig.height=3.5, fig.width=16, message=FALSE, warning=FALSE, include=FALSE}
+plt1 <- ggplot(aes(y = YearBuilt, x = Regionname), data = selected_dataset) + geom_boxplot() +
+  ylab('Year of Built') + ggtitle('Year Built') + theme(text = element_text(size = 10), legend.position = "none")
+plt2 <- ggplot(aes(y = Rooms, x = Regionname), data = selected_dataset) + geom_boxplot() +
+  ylab('Number of Rooms') + ggtitle('Rooms') +  theme(text = element_text(size = 10), legend.position = "none")
+plt3 <- ggplot(aes(y = Bathroom, x = Regionname), data = selected_dataset) + geom_boxplot() +
+  ylab('Number of Bathrooms') + ggtitle('Bathroom') + theme(text = element_text(size = 10), legend.position = "none")
+plt4 <- ggplot(aes(y = Landsize, x = Regionname), data = selected_dataset) + geom_boxplot() +
+  ylab('Size of Land') + ggtitle('Land Size') +  theme(text = element_text(size = 10), legend.position = "none")
+plt5 <- ggplot(aes(y = Distance, x = Regionname), data = selected_dataset) + geom_boxplot() +
+  ylab('Distance from CBD') + ggtitle('Distance') +  theme(text = element_text(size = 10), legend.position = "none")
+grid.arrange(plt1,plt2,plt3,plt4,plt5, ncol = 5, nrow = 1, top = "Boxplots of Features", bottom = "Figure (2)")
+```
+
+```{r fig.height=3.5, fig.width=16, message=FALSE, warning=FALSE, include=FALSE}
+melbh_data_plot <- selected_dataset %>% select(-Price, -Type, -Regionname)
+melbh_plot <- gather(melbh_data_plot) # melt data to plot
+ggplot(gather(melbh_plot), aes(value)) +geom_histogram(color = "white") +  facet_wrap(~key, scales = "free") + labs(caption = "Fig(3)") + ggtitle("Histograms of Features")
+```
+
+```{r message=FALSE, include=FALSE}
+selected_dataset %>% ggplot(aes(sample=Rooms)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none")
+selected_dataset %>% ggplot(aes(sample=YearBuilt)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none")
+selected_dataset %>% ggplot(aes(sample=Bathroom)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none")
+selected_dataset %>% ggplot(aes(sample=Landsize)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none")
+selected_dataset %>% ggplot(aes(sample=Distance)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none")
+
+```
+
+```{R message=FALSE, warning=FALSE, include=FALSE}
+price_predict.plain<-lm(Price ~ Rooms+YearBuilt+Bathroom+Landsize+Distance, data = selected_dataset)
+
+summary(price_predict.plain)
+
+durbinWatsonTest(price_predict.plain)
+
+##Multicollinearity for Model without Type and Region name category
+print("VIF Values:")
+vif(price_predict.plain)
+print("Tolerance:")
+1 / vif(price_predict.plain)
+mean(vif(price_predict.plain))
+
+shapiro.test(sample(price_predict.plain$residuals, 1000))
+
+cooks_plain <- cooks.distance(price_predict.plain)
+plot(sort(cooks_plain, decreasing=TRUE))
+
+max(cooks_plain)
+
+fitted_plain <- price_predict.plain$fitted
+res_plain <- price_predict.plain$residuals
+standardized.residuals_plain <- rstandard(price_predict.plain)
+possible.outlier_plain <- subset(selected_dataset, standardized.residuals_plain < -1.96 | standardized.residuals_plain > 1.96)
+possible.outlier_plain
+```
+
+```{R include=FALSE}
+price_predict.with_Type<-lm(Price ~ Rooms+YearBuilt+Bathroom+Type+Landsize+Distance, data = selected_dataset)
+
+summary(price_predict.with_Type)
+```
+
+```{R warning=FALSE, include=FALSE}
+price_predict.with_Regionname<-lm(Price ~ Rooms+YearBuilt+Bathroom+Regionname+Landsize+Distance, data = selected_dataset)
+
+summary(price_predict.with_Regionname)
+```
+
+```{R include=FALSE}
+step(price_predict.with_Type, direction="backward")
+```
+
+```{r include=FALSE}
+step(price_predict.with_Regionname, direction="backward")
+```
+
+```{r include=FALSE}
+durbinWatsonTest(price_predict.with_Type, simulate = TRUE)
+
+##Multicollinearity for Model with Type category
+print("VIF Values:")
+vif(price_predict.with_Type)
+print("Tolerance:")
+1 / vif(price_predict.with_Type)
+mean(vif(price_predict.with_Type))
+```
+
+```{r include=FALSE}
+durbinWatsonTest(price_predict.with_Regionname)
+
+##Multicollinearity for Model with Region name category
+print("VIF Values:")
+vif(price_predict.with_Regionname)
+print("Tolerance:")
+1 / vif(price_predict.with_Regionname)
+mean(vif(price_predict.with_Regionname))
+```
+
+```{r include=FALSE}
+plot(price_predict.with_Type)
+plot(price_predict.with_Regionname)
+```
+
+```{r include=FALSE}
+fitted_with_Type <- price_predict.with_Type$fitted
+res_with_Type <- price_predict.with_Type$residuals
+standardized.residuals_with_Type <- rstandard(price_predict.with_Type)
+possible.outlier_with_Type <- subset(selected_dataset, standardized.residuals_with_Type < -1.96 | standardized.residuals_with_Type > 1.96)
+possible.outlier_with_Type %>% arrange(Price)
+
+ggplot(price_predict.with_Type, aes(x = Distance, y = Price)) + geom_smooth(method = "lm", se = TRUE, color = "blue") + geom_segment(aes(xend = Distance, yend = fitted_with_Type), alpha = .1) + geom_point(aes(color = abs(res_with_Type), size = abs(res_with_Type))) + scale_color_continuous(low = "lightgrey", high = "red") + guides(color = FALSE, size = FALSE) + geom_point(aes(y = fitted_with_Type), shape = 1) + theme_bw()
+```
+
+```{r include=FALSE}
+fitted_with_Regionname <- price_predict.with_Regionname$fitted
+res_with_Regionname <- price_predict.with_Regionname$residuals
+standardized.residuals_with_Regionname <- rstandard(price_predict.with_Regionname)
+possible.outlier_with_Regionname <- subset(selected_dataset, standardized.residuals_with_Regionname < -1.96 | standardized.residuals_with_Regionname > 1.96)
+possible.outlier_with_Regionname %>% arrange(Price)
+
+ggplot(price_predict.with_Regionname, aes(x = Distance, y = Price)) + geom_smooth(method = "lm", se = TRUE, color = "blue") + geom_segment(aes(xend = Distance, yend = fitted_with_Regionname), alpha = .1) + geom_point(aes(color = abs(res_with_Regionname), size = abs(res_with_Regionname))) + scale_color_continuous(low = "lightgrey", high = "red") + guides(color = FALSE, size = FALSE) + geom_point(aes(y = fitted_with_Regionname), shape = 1) + theme_bw()
+```
+
+```{r include=FALSE}
+shapiro.test(sample(price_predict.with_Type$residuals, 1000))
+
+shapiro.test(sample(price_predict.with_Regionname$residuals, 1000))
+```
+
+## Planning
+
+In this analysis, three models are constructed to evaluate the significance of the "Region name" and "Type" features. Certain assumptions should be checked in order to have a more reliable regression model that generalizes well:
+
+1.  All predictor variables must be quantitative or categorical, and the outcome must be quantitative, continuous, and unbounded (*all predictors are either quantitative or categorical, and the outcome is continuous, and can be considered unbounded*).
+2.  The variance should be non-zero (*can be easily verified, the variance is non-zero*)
+3.  No perfect multicollinearity, predictor variables should not correlate highly (*visual inspection shows no perfect multicollinearity, but this is verified using VIF test*)
+4.  Predictors should be uncorrelated with external variables (*while there could be many factors involved in prices, I can assume that this assumption holds*)
+5.  The residuals should be normal, homoscedastic, and independent (*analysis will follow*)
+
+| Test/Model          | Without Type and Regionname | Model with Type | Model with Regionname |
+|----------------|:----------------------:|:------------:|:-----------------:|
+| Multiple R-squared  |           0.4986            |     0.5202      |        0.5963         |
+| Durbin-Watson Test  |         1.4774, p=0         |   1.369, p=0    |      1.6834, p=0      |
+| Max Cook's Distance |           0.0097            |     0.0115      |        0.0159         |
+| Max VIF             |            1.784            |      1.498      |         1.364         |
+| Min 1/VIF           |           0.5605            |     0.6674      |        0.7331         |
+| Residual Outliers   |             361             |       343       |          330          |
+
+: Model Assumptions Test
+
+The Durbin-Watson test for independent errors was not significant at the 5% level of significance. We assume that the data was sampled independently because **d is close to 2 (indicating no autocorrelation)**. Figures 1 and 4 show that **neither model has a linear relationship in residuals**. The **QQ-plots** in Figures 2 and 5, show that **residuals are not normal** and Figure 3 and Figure 6 explains both **models are not Homoscedastic**. However, it can be noted that model with Region name is more ideal than model with Type feature.
+
+The VIF test for influential points reveals **no influential points, no collinearity** in the data (as max VIF is less than 10 and min 1/VIF is greater than 0.2), and **no outliers influencing model** results (Cook's distance is well below the chosen cutoff value of 1). As a result, we conclude that there is no compelling case.
+
+In addition, only 343 residuals (model with Type) and 330 residuals (model with Region name) are greater than or less than 1.96 standard deviations. We **do not consider any of these as outliers** because they represent approximately 4% of the observations (8205). (till 5% can be considered)
+
+```{r echo=FALSE, fig.height=4, fig.width=16, message=FALSE, warning=FALSE}
+plt1 <- ggplot(price_predict.with_Type, aes(x = fitted_with_Type, y = res_with_Type)) + geom_point(aes(x = fitted_with_Type, y = res_with_Type)) + geom_hline(yintercept = 0, linetype = 2) + xlab("Fitted Values") + ylab("Residuals") + ggtitle("Figure 1`: Residuals vs. Fitted Plot") + geom_smooth(aes(colour="red"),se = TRUE) + theme_bw() + theme(legend.position = "none")
+
+plt2 <- price_predict.with_Type %>% ggplot(aes(sample=standardized.residuals_with_Type)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none") + xlab("Theoretical Quantiles") + ylab("Standardized Residuals") + ggtitle(" Figure 2: Normal Q-Q Plot of Residuals") + theme_bw() + theme(legend.position = "none")
+
+plt3 <- ggplot(price_predict.with_Type, aes(x = fitted_with_Type, y = sqrt(standardized.residuals_with_Type))) + geom_point(aes(x = fitted_with_Type, y = sqrt(standardized.residuals_with_Type))) + geom_hline(yintercept = 0, linetype = 2) + xlab("Fitted Values") + ylab("Sqrt Standardized Residuals") + ggtitle("Figure 3: Square root of Standarized Residuals vs. Fitted Plot") + geom_smooth(aes(colour="red"),se = TRUE) + theme_bw() + theme(legend.position = "none")
+
+grid.arrange(plt1,plt2,plt3, ncol = 3, nrow = 1, top = "Residuals plot of Model with Type category lm(Price ~ Rooms+Bathroom,+YearBuilt+Landsize+Distance+Type)")
+```
+
+```{r echo=FALSE, fig.height=4, fig.width=16, message=FALSE, warning=FALSE}
+plt1 <- ggplot(price_predict.with_Regionname, aes(x = fitted_with_Regionname, y = res_with_Regionname)) + geom_point(aes(x = fitted_with_Regionname, y = res_with_Regionname)) + geom_hline(yintercept = 0, linetype = 2) + xlab("Fitted Values") + ylab("Residuals") + ggtitle("Figure 4: Residuals vs. Fitted Plot") + geom_smooth(aes(colour="red"),se = TRUE) + theme_bw() + theme(legend.position = "none")
+
+plt2 <- price_predict.with_Regionname %>% ggplot(aes(sample=standardized.residuals_with_Regionname)) + stat_qq() + geom_qq_line(aes(color="red")) + theme(legend.position = "none") + xlab("Theoretical Quantiles") + ylab("Standardized Residuals") + ggtitle("Figure 5: Normal Q-Q Plot of Residuals") + theme_bw() + theme(legend.position = "none")
+
+plt3 <- ggplot(price_predict.with_Regionname, aes(x = fitted_with_Regionname, y = sqrt(standardized.residuals_with_Regionname))) + geom_point(aes(x = fitted_with_Regionname, y = sqrt(standardized.residuals_with_Regionname))) + geom_hline(yintercept = 0, linetype = 2) + xlab("Fitted Values") + ylab("Sqrt Standardized Residuals") + ggtitle("Figure 6: Square root of Standarized Residuals vs. Fitted Plot") + geom_smooth(aes(colour="red"),se = TRUE) + theme_bw() + theme(legend.position = "none")
+
+grid.arrange(plt1,plt2,plt3, ncol = 3, nrow = 1, top = "Residuals plot of Model with Region name category lm(Price ~ Rooms+Bathroom,+YearBuilt+Landsize+Distance+Regionname)")
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+cooks_with_Type <- cooks.distance(price_predict.with_Type)
+plot(sort(cooks_with_Type, decreasing=TRUE))
+
+max(cooks_with_Type)
+
+cooks_with_Regionname <- cooks.distance(price_predict.with_Regionname)
+plot(sort(cooks_with_Regionname, decreasing=TRUE))
+
+max(cooks_with_Regionname)
+
+```
+
+```{r fig.height=5, fig.width=16, warning=FALSE, include=FALSE}
+plt1 <- ggplot(selected_dataset, aes(y=res_with_Type, x=fitted_with_Type, colour=cooks_with_Type>3*mean(cooks_with_Type))) + geom_point() + scale_color_manual(values=c("black", "red"))
+
+plt2 <- ggplot(selected_dataset, aes(y=res_with_Regionname, x=fitted_with_Regionname, colour=cooks_with_Regionname>3*mean(cooks_with_Regionname))) + geom_point() + scale_color_manual(values=c("black", "red"))
+
+grid.arrange(plt1,plt2, ncol = 2, nrow = 1, top = "Influencial Cases")
+```
+
+```{r include=FALSE}
+confint(price_predict.with_Type)
+```
+
+```{r include=FALSE}
+confint(price_predict.with_Regionname)
+```
+
+## Analysis
+
+To Compare whether two models are significantly different or not, ANOVA test is performed and the results shows the model with "Type" outperforms the model without it and the model with the "Regionname" feature outperforms the model without it. The F-statistic and related p-value for each of our models provide sufficient evidence that our models outperform the simple mean. This effectively means that at the 5% significance level, I have enough evidence to conclude that the models created thus far outperform the simple mean. When the two models "with Type feature and without Region name" and "with Region name feature and without Type" are compared, the results show that the **model with Region name (Res Df = 6486) outperforms the model with Type feature (Res Df = 6483) with F = 407.3, p\<0.01.**
+
+| Feature                                |    2.5%    |    Mean    |   97.5%    | t-value | p-value  |
+|-----------------------------|:--------:|:--------:|:--------:|:-----:|:-------:|
+| (Intercept)                            | 8039464.84 | 8495355.52 | 8951246.12 | 36.530  | \<2e-16  |
+| Rooms                                  | 243993.59  | 255231.04  | 266468.48  | 44.524  | \<2e-16  |
+| YearBuilt                              |  -4419.81  |  -4187.48  |  -3955.15  | -35.33  | \<2e-16  |
+| Bathroom                               | 180897.89  | 198120.57  | 215343.25  | 22.551  | \<2e-16  |
+| landsize                               |   116.47   |   138.86   |   161.24   |  12.16  | \<2e-16  |
+| Distance                               | -30856.73  | -28973.54  | -27090.35  | -30.16  | \<2e-16  |
+| Region name_Northern Metropolitan      | -212939.82 | -186626.91 | -160313.25 | -13.904 | \<2e-16  |
+| Region name_Northern Victoria          | -329854.80 | -14851.92  | 300150.96  | -0.092  |  0.926   |
+| Region name_South-Eastern Metropolitan |  67489.14  | 125167.24  | 182845.33  |  4.254  | 2.13e-05 |
+| Region name_Southern Metropolitan      |  54635.45  |  80542.99  | 106450.52  |  6.094  | 1.16e-09 |
+| Region name_Western Metropolitan       | -266519.06 | -239912.97 | -213306.88 | -17.677 | \<2e-16  |
+
+: Coefficient of Model with Region name
+
+```{r include=FALSE}
+anova(price_predict.plain, price_predict.with_Type)
+```
+
+```{r include=FALSE}
+anova(price_predict.plain, price_predict.with_Regionname)
+```
+
+```{r include=FALSE}
+anova(price_predict.with_Type, price_predict.with_Regionname)
+
+```
+
+## Conclusion
+
+The outcome of this analysis's investigation is that **Region name is a better predictor variable than Type** as such; at a 5% level of significance, their impacts on price are marginally significant different. Additional research shows that including both features improves the model's performance. Please refer to the Appendix 6 for managerial thoughts regarding this model.
+
+We infer from this model that **59% of the variation in house prices can be accounted for by the number of rooms, year of built, the number of bathrooms, the land size, the distance from CBD, and the name of the region of the property**. Additionally, we can forecast how these factors will affect future house prices. For instance, **if nothing else changes, adding a bathroom to a property will raise the price by 180897.89 to 215343.25 dollars**.
+
+The evaluated models do not generalize very well because some of their assumptions violated, despite the fact that improving their quality is not a primary objective of this analysis. As a result, they cannot be trusted to predict prices accurately, necessitating the use of potentially more complex methods.
+
+#### Appendix 1
+
+Summary statistic of Dataset
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+Main_dataset <- melbh_dataset %>% select(Price, Type, Rooms, Bathroom, Regionname, YearBuilt, Landsize, Distance)
+Main_dataset %>% summarise_all(list(~ sum(is.na(.))))
+summary(Main_dataset)
+```
+
+#### Appendix 2
+
+Outliers/Abrnormal values in Dataset
+
+```{r echo=FALSE, fig.height=4, fig.width=16, message=FALSE, warning=FALSE}
+plt1 <- ggplot(aes(y = YearBuilt, x = Type), data = Main_dataset) + geom_boxplot() +
+  ylab('Year of Built') + ggtitle('Year Built') + theme(text = element_text(size = 10), legend.position = "none")
+plt2 <- ggplot(aes(y = Rooms, x = Type), data = Main_dataset) + geom_boxplot() +
+  ylab('Number of Rooms') + ggtitle('Rooms') +  theme(text = element_text(size = 10), legend.position = "none")
+plt3 <- ggplot(aes(y = Bathroom, x = Type), data = Main_dataset) + geom_boxplot() +
+  ylab('Number of Bathrooms') + ggtitle('Bathroom') + theme(text = element_text(size = 10), legend.position = "none")
+plt4 <- ggplot(aes(y = Landsize, x = Type), data = Main_dataset) + geom_boxplot() +
+  ylab('Size of Land') + ggtitle('Land Size') +  theme(text = element_text(size = 10), legend.position = "none")
+plt5 <- ggplot(aes(y = Distance, x = Type), data = Main_dataset) + geom_boxplot() +
+  ylab('Distance from CBD') + ggtitle('Distance') +  theme(text = element_text(size = 10), legend.position = "none")
+grid.arrange(plt1,plt2,plt3,plt4,plt5, ncol = 5, nrow = 1, top = "Boxplots of Features", bottom = "Appendix(2)")
+```
+
+```{r echo=FALSE, fig.height=16, fig.width=16, message=FALSE, warning=FALSE}
+#ggpairs(melbh_dataset[, c("Price", "Rooms", "Distance", "Postcode", "Bathroom", "Car", "Landsize", "BuildingArea", "YearBuilt","Lattitude", "Longtitude","Propertycount")], mapping=ggplot2::aes(colour = melbh_dataset$Type),legends = T,axisLabels = "show",  upper = list(continuous = wrap("cor", Regionname = "spearman", size = 2.5, hjust=0.7)))+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+```
+
+#### Appendix 3
+
+```{r echo=FALSE, fig.height=5, fig.width=16, message=FALSE, warning=FALSE}
+g1 <- selected_dataset %>% ggplot(aes(y=Price,x=Rooms)) + geom_point()+ geom_smooth(method="lm") 
+g2 <- selected_dataset %>% ggplot(aes(y=Price,x=Bathroom)) + geom_point()+ geom_smooth(method="lm")
+g3 <- selected_dataset %>% ggplot(aes(y=Price,x=YearBuilt)) + geom_point()+ geom_smooth(method="lm")
+g4 <- selected_dataset %>% ggplot(aes(y=Price,x=Landsize)) + geom_point()+ geom_smooth(method="lm")
+g5 <- selected_dataset %>% ggplot(aes(y=Price,x=Distance)) + geom_point()+ geom_smooth(method="lm")
+grid.arrange(g1,g2,g3,g4,g5, nrow = 2, ncol = 3)
+```
+
+#### Appendix 4
+
+Anova results:
+
+1.  Anova on with and without Type
+
+```{r echo=FALSE, message=TRUE, warning=FALSE}
+print(anova(price_predict.plain, price_predict.with_Type))
+```
+
+2.  Anova on with and without Region name
+
+```{r echo=FALSE, message=TRUE, warning=FALSE}
+print(anova(price_predict.plain, price_predict.with_Regionname))
+```
+
+3.  Anova on Type and Region name models
+
+```{r echo=FALSE, message=TRUE, warning=FALSE}
+print(anova(price_predict.with_Type, price_predict.with_Regionname))
+```
+
+#### Appendix 5
+
+```{r echo=FALSE, fig.height=10, fig.width=16, message=FALSE, warning=FALSE}
+plt1 <- ggplot(price_predict.with_Type, aes(x = Distance, y = Price)) + geom_smooth(method = "lm", se = TRUE, color = "blue") + geom_segment(aes(xend = Distance, yend = fitted_with_Type), alpha = .1) + geom_point(aes(color = abs(res_with_Type), size = abs(res_with_Type))) + scale_color_continuous(low = "lightgrey", high = "red") + guides(color = FALSE, size = FALSE) + geom_point(aes(y = fitted_with_Type), shape = 1) + theme_bw() + ggtitle("Outliers plot in Type model")
+
+plt2 <- ggplot(price_predict.with_Regionname, aes(x = Distance, y = Price)) + geom_smooth(method = "lm", se = TRUE, color = "blue") + geom_segment(aes(xend = Distance, yend = fitted_with_Regionname), alpha = .1) + geom_point(aes(color = abs(res_with_Regionname), size = abs(res_with_Regionname))) + scale_color_continuous(low = "lightgrey", high = "red") + guides(color = FALSE, size = FALSE) + geom_point(aes(y = fitted_with_Regionname), shape = 1) + theme_bw() + ggtitle("Outliers plot in Region name model")
+
+plt3 <- ggplot(selected_dataset, aes(y=res_with_Type, x=fitted_with_Type, colour=cooks_with_Type>3*mean(cooks_with_Type))) + geom_point() + scale_color_manual(values=c("black", "red")) + ggtitle("Residual vs Fitted plot in Type model")
+
+plt4 <- ggplot(selected_dataset, aes(y=res_with_Regionname, x=fitted_with_Regionname, colour=cooks_with_Regionname>3*mean(cooks_with_Regionname))) + geom_point() + scale_color_manual(values=c("black", "red")) + ggtitle("Residual vs Fitted plot in Region name model")
+
+grid.arrange(plt1,plt2,plt3,plt4, ncol = 2, nrow = 2, top = "Influencial Cases", bottom = "Appendix(5)")
+
+```
+
+#### Appendix 6
+
+Variance Explained by taking both Type an Region name categories is around 65% higher than taking into account individual categorical features, so its better to consider both Type and Region name for Price prediction. Although, the model still violates the assumption of Linearity, Homoscedasticity and Normality.
+
+```{r echo=FALSE, fig.height=4, fig.width=8}
+price_predict.with_both<-lm(Price ~ Rooms+YearBuilt+Bathroom+Regionname+Type+Landsize+Distance, data = selected_dataset)
+summary(price_predict.with_both)
+
+plot(price_predict.with_Type)
+```
